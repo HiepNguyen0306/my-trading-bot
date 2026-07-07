@@ -21,6 +21,10 @@ if "analyzed" not in st.session_state:
     st.session_state.analyzed = False
 if "analysis_results" not in st.session_state:
     st.session_state.analysis_results = {}
+if "watchlist_results" not in st.session_state:
+    st.session_state.watchlist_results = []
+if "is_watchlist_scanned" not in st.session_state:
+    st.session_state.is_watchlist_scanned = False
 
 # --- CÁC HÀM XỬ LÝ TOÁN HỌC & KỸ THUẬT ---
 def calculate_indicators(df):
@@ -104,6 +108,14 @@ def generate_strategy(df):
         "reason": " & ".join(reason) if reason else "Chưa xuất hiện tín hiệu kích hoạt rõ ràng."
     }
 
+# --- TỰ ĐỘNG NHẬN DIỆN THỊ TRƯỜNG ---
+def auto_detect_market(ticker_symbol):
+    ticker_symbol = ticker_symbol.upper().strip()
+    # Cổ phiếu VN thường chỉ có 3 chữ cái và không có dấu gạch ngang (ví dụ: FPT, HPG, TCB)
+    if len(ticker_symbol) == 3 and "-" not in ticker_symbol:
+        return "Chứng khoán Việt Nam"
+    return "Crypto & Quốc tế"
+
 # --- KẾT NỐI CHATBOT GEMINI AI ---
 def call_gemini_api(api_key, model_name, system_prompt, user_question):
     api_key = api_key.strip()
@@ -133,11 +145,9 @@ def send_discord_notification(webhook_url, ticker, result, market_type):
     if not webhook_url:
         return False, "Chưa nhập Webhook URL."
         
-    # Không gửi thông báo nếu chỉ là trạng thái theo dõi thông thường
     if result['action'] == "THEO DÕI":
-        return True, "Trạng thái hiện tại là 'THEO DÕI' (Không gửi thông báo để tránh loãng phòng chat)."
+        return True, "Trạng thái hiện tại là 'THEO DÕI' (Bỏ qua không gửi)."
 
-    # Phân loại màu sắc thông báo (Xanh cho MUA, Đỏ cho BÁN)
     is_buy = "LONG" in result['action'] or "MUA" in result['action']
     color_code = 3066993 if is_buy else 15158332 
 
@@ -258,11 +268,9 @@ def aggregate_free_news(ticker_symbol, market_type, limit=8):
     seen_links = set()
     seen_titles = set()
 
-    # 1) Yahoo Finance vẫn giữ làm nguồn đầu tiên
     yahoo_symbol = ticker_symbol if "Crypto" in market_type else f"{ticker_symbol}.VN"
     all_sources_news = fetch_yahoo_news(yahoo_symbol, limit=5)
 
-    # 2) Bổ sung Google News RSS + site cụ thể
     for source_name, query in get_news_sources_for_ticker(ticker_symbol, market_type):
         all_sources_news.extend(fetch_google_news_rss(query, source_name=source_name, limit=4))
 
@@ -305,18 +313,12 @@ def render_source_shortcuts(ticker_symbol, market_type):
 
 # --- GIAO DIỆN SƯỜN TRÁI (SIDEBAR) ---
 st.sidebar.header("⚙️ Cấu hình Hệ thống")
-market_type = st.sidebar.radio("Chọn thị trường:", ("Crypto & Quốc tế", "Chứng khoán Việt Nam"))
 
-if market_type == "Crypto & Quốc tế":
-    ticker = st.sidebar.text_input("Nhập mã (BTC-USD, ETH-USD, AAPL...):", "BTC-USD").upper()
-else:
-    ticker = st.sidebar.text_input("Nhập mã cổ phiếu VN (FPT, HPG, TCB...):", "FPT").upper()
-
+# Ô dán API Key và Discord Webhook
 gemini_api_key = st.sidebar.text_input("Dán Gemini API Key vào đây:", type="password")
 st.sidebar.markdown("[Lấy Gemini API Key miễn phí tại đây](https://aistudio.google.com/)")
 
-# Bổ sung ô nhập Webhook của Discord (tùy chọn ẩn dạng password để bảo mật đường dẫn)
-discord_webhook_url = st.sidebar.text_input("Dán Discord Webhook URL vào đây (Tùy chọn):", type="password", help="Để nhận thông báo tự động về điện thoại khi có tín hiệu Mua/Bán.")
+discord_webhook_url = st.sidebar.text_input("Dán Discord Webhook URL vào đây:", type="password", help="Để nhận thông báo tự động về điện thoại khi có tín hiệu Mua/Bán.")
 
 # Cập nhật danh sách mô hình năm 2026 (Mô hình miễn phí ổn định nhất)
 gemini_model = st.sidebar.selectbox(
@@ -324,8 +326,30 @@ gemini_model = st.sidebar.selectbox(
     ("gemini-2.5-flash-lite", "gemini-2.5-flash", "gemini-2.0-flash")
 )
 
-# --- XỬ LÝ SỰ KIỆN NHẤN NÚT PHÂN TÍCH ---
-if st.sidebar.button("🚀 Bắt đầu Phân tích"):
+st.sidebar.divider()
+st.sidebar.subheader("🌟 PHÂN TÍCH ĐƠN LẺ")
+market_type = st.sidebar.radio("Chọn thị trường đơn lẻ:", ("Crypto & Quốc tế", "Chứng khoán Việt Nam"))
+
+if market_type == "Crypto & Quốc tế":
+    ticker = st.sidebar.text_input("Nhập mã đơn lẻ (BTC-USD, ETH-USD, AAPL...):", "BTC-USD").upper()
+else:
+    ticker = st.sidebar.text_input("Nhập mã cổ phiếu VN đơn lẻ (FPT, HPG...):", "FPT").upper()
+
+single_btn = st.sidebar.button("🚀 Phân tích Mã đơn lẻ")
+
+st.sidebar.divider()
+st.sidebar.subheader("⭐ DANH SÁCH YÊU THÍCH (WATCHLIST)")
+watchlist_input = st.sidebar.text_area(
+    "Nhập các mã ngăn cách bằng dấu phẩy:", 
+    value="BTC-USD, ETH-USD, FPT, HPG",
+    help="Hệ thống tự nhận diện Crypto hay cổ phiếu VN. Ví dụ: BTC-USD, ETH-USD, FPT, HPG"
+)
+watchlist_btn = st.sidebar.button("🔍 Quét Toàn bộ Danh sách")
+
+
+# --- XỬ LÝ SỰ KIỆN NHẤN NÚT PHÂN TÍCH ĐƠN LẺ ---
+if single_btn:
+    st.session_state.is_watchlist_scanned = False # Tắt chế độ hiển thị danh sách
     with st.spinner("Đang xử lý dữ liệu chuyên sâu..."):
         try:
             df = pd.DataFrame()
@@ -344,18 +368,14 @@ if st.sidebar.button("🚀 Bắt đầu Phân tích"):
                 st.error("Không tìm thấy dữ liệu. Vui lòng kiểm tra lại mã.")
                 st.session_state.analyzed = False
             else:
-                # Tính toán kỹ thuật
                 df = calculate_indicators(df)
                 result = generate_strategy(df)
                 
-                # --- TỰ ĐỘNG GỬI THÔNG BÁO DISCORD NẾU CÓ CẤU HÌNH ---
+                # Gửi thông báo Discord nếu có cấu hình
                 discord_status = None
                 if discord_webhook_url.strip():
                     success, msg = send_discord_notification(discord_webhook_url, ticker, result, market_type)
-                    if success:
-                        discord_status = ("success", msg)
-                    else:
-                        discord_status = ("error", msg)
+                    discord_status = ("success", msg) if success else ("error", msg)
                 
                 # Lưu thông tin số liệu hiện tại vào bộ nhớ
                 st.session_state.current_analysis = {
@@ -368,7 +388,6 @@ if st.sidebar.button("🚀 Bắt đầu Phân tích"):
                     "reason": result['reason']
                 }
                 
-                # Lưu dữ liệu vẽ biểu đồ, thông tin thị trường và trạng thái gửi thông báo Discord
                 st.session_state.analysis_results = {
                     "result": result,
                     "chart_data": df[['Close', 'BB_Upper', 'BB_Lower']].tail(60),
@@ -382,7 +401,77 @@ if st.sidebar.button("🚀 Bắt đầu Phân tích"):
             st.error(f"Lỗi hệ thống: {e}")
             st.session_state.analyzed = False
 
-# --- HIỂN THỊ KẾT QUẢ PHÂN TÍCH (NẾU ĐÃ BẤM NÚT PHÂN TÍCH THÀNH CÔNG) ---
+
+# --- XỬ LÝ SỰ KIỆN QUÉT DANH SÁCH YÊU THÍCH (WATCHLIST) ---
+if watchlist_btn:
+    st.session_state.analyzed = False # Tắt chế độ hiển thị đơn lẻ
+    watchlist_tickers = [t.strip().upper() for t in watchlist_input.split(",") if t.strip()]
+    results = []
+    
+    progress_bar = st.progress(0)
+    status_text = st.empty()
+    
+    for i, t in enumerate(watchlist_tickers):
+        status_text.text(f"⏳ Đang quét mã: {t} ({i+1}/{len(watchlist_tickers)})")
+        progress_bar.progress((i + 1) / len(watchlist_tickers))
+        
+        m_type = auto_detect_market(t)
+        try:
+            df = pd.DataFrame()
+            if m_type == "Crypto & Quốc tế":
+                df = yf.download(t, period="6m", interval="1d", progress=False)
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = df.columns.get_level_values(0)
+            else:
+                from vnstock import Market
+                m = Market()
+                df = m.equity(t).ohlcv(length=120, interval='1D')
+                if not df.empty:
+                    df = df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'})
+            
+            if df.empty:
+                results.append({"Mã": t, "Giá hiện tại": "Lỗi tải", "RSI (14)": "N/A", "Xu hướng": "N/A", "Đề xuất hành động": "Sai mã hoặc lỗi mạng", "Discord": "N/A"})
+            else:
+                df = calculate_indicators(df)
+                res = generate_strategy(df)
+                
+                # Tự động gửi Discord cho từng mã nếu có tín hiệu thực sự (MUA/BÁN) và có dán webhook
+                discord_status = "Chưa cấu hình"
+                if discord_webhook_url.strip():
+                    if res['action'] != "THEO DÕI":
+                        success, msg = send_discord_notification(discord_webhook_url, t, res, m_type)
+                        discord_status = "✅ Đã gửi tín hiệu" if success else f"❌ Lỗi: {msg}"
+                    else:
+                        discord_status = "⏳ Theo dõi (Không gửi)"
+                        
+                results.append({
+                    "Mã": t,
+                    "Giá hiện tại": f"${res['price']}" if m_type == "Crypto & Quốc tế" else f"{res['price']}k",
+                    "RSI (14)": res['rsi'],
+                    "Xu hướng": res['trend'],
+                    "Đề xuất hành động": res['action'],
+                    "Discord": discord_status
+                })
+        except Exception as e:
+            results.append({"Mã": t, "Giá hiện tại": "Lỗi", "RSI (14)": "N/A", "Xu hướng": "N/A", "Đề xuất hành động": f"Lỗi hệ thống: {e}", "Discord": "N/A"})
+            
+    progress_bar.empty()
+    status_text.empty()
+    st.session_state.watchlist_results = results
+    st.session_state.is_watchlist_scanned = True
+
+
+# --- HIỂN THỊ KẾT QUẢ DANH SÁCH YÊU THÍCH (WATCHLIST) ---
+if st.session_state.is_watchlist_scanned and st.session_state.watchlist_results:
+    st.subheader("📋 Bảng Tổng hợp Kết quả Quét Danh sách Yêu thích")
+    st.write("Hệ thống đã quét nhanh dữ liệu kỹ thuật và gửi thông báo Discord cho các mã có tín hiệu thực tế.")
+    
+    # Định dạng bảng hiển thị đẹp mắt hơn
+    df_watchlist = pd.DataFrame(st.session_state.watchlist_results)
+    st.dataframe(df_watchlist, use_container_width=True)
+
+
+# --- HIỂN THỊ KẾT QUẢ PHÂN TÍCH ĐƠN LẺ ---
 if st.session_state.analyzed and st.session_state.analysis_results:
     data = st.session_state.analysis_results
     result = data["result"]
@@ -433,6 +522,7 @@ if st.session_state.analyzed and st.session_state.analysis_results:
         st.warning("Chưa tìm thấy bài viết mới từ các nguồn tự động. Bạn có thể mở nhanh các nguồn bên dưới để kiểm tra thủ công.")
         render_source_shortcuts(ticker_name, m_type)
 
+
 # --- PHẦN KHUNG CHAT TRÒ CHUYỆN AI ---
 st.divider()
 st.subheader("💬 Trò chuyện với Trợ lý ảo AI về mã này")
@@ -451,10 +541,10 @@ if user_input := st.chat_input("Hãy hỏi trợ lý AI (ví dụ: 'Mã này có
         analysis_data = st.session_state.current_analysis
         
         if not analysis_data:
-            response_text = "Chào bạn! Hãy nhấn nút '🚀 Bắt đầu Phân tích' mã cổ phiếu ở sườn trái trước, sau đó tôi sẽ có dữ liệu cụ thể để tư vấn kỹ hơn cho bạn nhé!"
+            response_text = "Chào bạn! Hãy nhấn nút '🚀 Phân tích Mã đơn lẻ' ở sườn trái trước, sau đó tôi sẽ có dữ liệu cụ thể của mã gần nhất để tư vấn kỹ hơn cho bạn nhé!"
         elif not gemini_api_key:
             response_text = f"""⚠️ **Chatbot AI chuyên sâu chưa được kích hoạt.**  
-            Số liệu kỹ thuật hiện tại của mã **{analysis_data['ticker']}**:  
+            Số liệu kỹ thuật hiện tại của mã gần nhất **{analysis_data['ticker']}**:  
             * **Giá:** {analysis_data['price']}  
             * **RSI:** {analysis_data['rsi']} (Xu hướng chính: {analysis_data['trend']})  
             * **Khuyến nghị:** {analysis_data['action']}  
