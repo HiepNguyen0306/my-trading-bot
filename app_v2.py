@@ -9,7 +9,7 @@ import json
 st.set_page_config(page_title="Trợ lý Đầu tư AI V2", layout="wide", page_icon="🤖")
 
 st.title("🤖 Trợ lý Đầu tư AI Đa Năng - Phân Tích & Chatbot")
-st.write("Hệ thống phân tích kỹ thuật nâng cao kết hợp tin tức thời gian thực và Trợ lý ảo AI (Không phụ thuộc yfinance).")
+st.write("Hệ thống phân tích kỹ thuật nâng cao kết hợp tin tức thời gian thực và Trợ lý ảo AI (Không dùng yfinance).")
 
 # Khởi tạo các trạng thái trong bộ nhớ hệ thống (Session State) để tránh mất dữ liệu khi chat
 if "messages" not in st.session_state:
@@ -83,7 +83,7 @@ def generate_strategy(df):
     elif trend == "GIẢM" and rsi > 58:
         action = "SHORT / BÁN CHỐT LỜI"
         reason.append("Xu hướng giảm trung hạn, giá hồi phục ngắn hạn (RSI cao).")
-    elif macd < signal Glen and prev['MACD'] >= prev['Signal_Line'] and trend == "GIẢM":
+    elif macd < signal and prev['MACD'] >= prev['Signal_Line'] and trend == "GIẢM":
         action = "SHORT (Bán khống)"
         reason.append("Giao cắt MACD hướng xuống (Bearish Crossover) trong xu hướng giảm.")
     elif close >= bb_upper:
@@ -137,7 +137,7 @@ def send_discord_notification(webhook_url, ticker, result, market_type):
         return False, "Chưa nhập Webhook URL."
         
     if result['action'] == "THEO DÕI":
-        return True, "Trạng thái hiện tại là 'THEO DÕI' (Không gửi thông báo để tránh loãng phòng chat)."
+        return True, "Trạng thái hiện tại là 'THEO DÕI' (Bỏ qua không gửi)."
 
     is_buy = "LONG" in result['action'] or "MUA" in result['action']
     color_code = 3066993 if is_buy else 15158332 
